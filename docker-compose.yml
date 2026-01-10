@@ -1,0 +1,113 @@
+version: '3.8'
+
+services:
+  # Manager服务 - 集群管理
+  manager:
+    build: ./manager
+    container_name: distributed-manager
+    networks:
+      - distributed-network
+    ports:
+      - "9000:9000"
+    environment:
+      - LEADER_HOST=manager
+      - LEADER_PORT=9000
+    volumes:
+      - manager_logs:/app/logs
+    restart: unless-stopped
+
+  # 存储节点1
+  node1:
+    build: ./node
+    container_name: distributed-node1
+    networks:
+      - distributed-network
+    ports:
+      - "8001:8001"
+      - "9101:9001"  # 查询端口
+    environment:
+      - NODE_ID=1
+      - NODE_PORT=8001
+      - STUDENT_ID=2353250
+      - MANAGER_HOST=manager
+      - MANAGER_PORT=9000
+    volumes:
+      - node1_data:/data
+    depends_on:
+      - manager
+    restart: unless-stopped
+
+  # 存储节点2
+  node2:
+    build: ./node
+    container_name: distributed-node2
+    networks:
+      - distributed-network
+    ports:
+      - "8002:8001"
+      - "9102:9001"  # 查询端口
+    environment:
+      - NODE_ID=2
+      - NODE_PORT=8001
+      - STUDENT_ID=2353250
+      - MANAGER_HOST=manager
+      - MANAGER_PORT=9000
+    volumes:
+      - node2_data:/data
+    depends_on:
+      - manager
+    restart: unless-stopped
+
+  # 存储节点3
+  node3:
+    build: ./node
+    container_name: distributed-node3
+    networks:
+      - distributed-network
+    ports:
+      - "8003:8001"
+      - "9103:9001"  # 查询端口
+    environment:
+      - NODE_ID=3
+      - NODE_PORT=8001
+      - STUDENT_ID=2353250
+      - MANAGER_HOST=manager
+      - MANAGER_PORT=9000
+    volumes:
+      - node3_data:/data
+    depends_on:
+      - manager
+    restart: unless-stopped
+
+  # 客户端服务 - 用于生成测试数据和执行操作
+  client:
+    build: ./client
+    container_name: distributed-client
+    networks:
+      - distributed-network
+    environment:
+      - MANAGER_HOST=manager
+      - MANAGER_PORT=9000
+      - STORAGE_NODES=node1:8001:1,node2:8001:2,node3:8001:3  # 备用配置
+    volumes:
+      - client_data:/data
+    depends_on:
+      - manager
+      - node1
+      - node2
+      - node3
+    stdin_open: true
+    tty: true
+    # 默认不启动，用于手动执行命令
+    command: ["sleep", "infinity"]
+
+networks:
+  distributed-network:
+    driver: bridge
+
+volumes:
+  manager_logs:
+  node1_data:
+  node2_data:
+  node3_data:
+  client_data:
