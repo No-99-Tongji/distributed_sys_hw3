@@ -61,10 +61,85 @@ public class StorageNode {
     }
     
     /**
+     * 注册到Manager
+     */
+    private void registerWithManager() {
+        String managerHost = System.getenv("MANAGER_HOST");
+        if (managerHost == null) {
+            managerHost = "manager";  // 默认值
+        }
+        
+        try {
+            DatagramSocket regSocket = new DatagramSocket();
+            String joinMessage = "JOIN:" + nodeId + ":" + port;
+            byte[] data = joinMessage.getBytes();
+            
+            InetAddress managerAddress = InetAddress.getByName(managerHost);
+            DatagramPacket packet = new DatagramPacket(data, data.length, managerAddress, 9000);
+            
+            regSocket.send(packet);
+            System.out.println("已向Manager注册: " + joinMessage);
+            regSocket.close();
+        } catch (Exception e) {
+            System.err.println("注册到Manager失败: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * 发送心跳消息到Manager
+     */
+    private void sendHeartbeat() {
+        String managerHost = System.getenv("MANAGER_HOST");
+        if (managerHost == null) {
+            managerHost = "manager";
+        }
+        
+        try {
+            DatagramSocket heartbeatSocket = new DatagramSocket();
+            String heartbeatMessage = "HEARTBEAT:" + nodeId + ":localhost:" + port;
+            byte[] data = heartbeatMessage.getBytes();
+            
+            InetAddress managerAddress = InetAddress.getByName(managerHost);
+            DatagramPacket packet = new DatagramPacket(data, data.length, managerAddress, 9000);
+            
+            heartbeatSocket.send(packet);
+            heartbeatSocket.close();
+        } catch (Exception e) {
+            System.err.println("发送心跳失败: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * 启动心跳线程
+     */
+    private void startHeartbeat() {
+        Thread heartbeatThread = new Thread(() -> {
+            while (running) {
+                try {
+                    Thread.sleep(5000); // 每5秒发送一次心跳
+                    sendHeartbeat();
+                } catch (InterruptedException e) {
+                    break;
+                } catch (Exception e) {
+                    System.err.println("心跳线程异常: " + e.getMessage());
+                }
+            }
+        });
+        heartbeatThread.setDaemon(true);
+        heartbeatThread.start();
+    }
+    
+    /**
      * 启动存储节点
      */
     public void start() {
         System.out.println("存储节点 " + nodeId + " 启动在端口 " + port);
+        
+        // 注册到Manager
+        registerWithManager();
+        
+        // 启动心跳线程
+        startHeartbeat();
         
         // 启动数据接收线程
         Thread dataThread = new Thread(this::handleDataPackets);
@@ -102,6 +177,9 @@ public class StorageNode {
      * 处理查询请求
      */
     private void handleQueries() {
+        // 暂时禁用查询功能，避免端口冲突
+        System.out.println("查询功能已暂时禁用");
+        /*
         // 启动查询服务器在另一个端口
         try (DatagramSocket querySocket = new DatagramSocket(port + 1000)) {
             byte[] buffer = new byte[1024];
@@ -121,6 +199,7 @@ public class StorageNode {
         } catch (SocketException e) {
             e.printStackTrace();
         }
+        */
     }
     
     /**
@@ -268,9 +347,41 @@ public class StorageNode {
     }
     
     /**
-     * 处理用户输入
+     * 处理用户输入 (支持无交互模式)
      */
     private void handleUserInput() {
+        try {
+            // 检查是否有可用输入
+            if (System.in.available() == 0) {
+                System.out.println("运行在无交互模式，定期显示状态...");
+                
+                // 无交互模式：定期显示状态
+                while (running) {
+                    try {
+                        Thread.sleep(30000); // 每30秒显示一次状态
+                        showStatus();
+                    } catch (InterruptedException ie) {
+                        break;
+                    }
+                }
+                return;
+            }
+        } catch (IOException e) {
+            System.out.println("检查输入失败，使用无交互模式");
+            
+            // 无交互模式
+            while (running) {
+                try {
+                    Thread.sleep(30000); // 每30秒显示一次状态
+                    showStatus();
+                } catch (InterruptedException ie2) {
+                    break;
+                }
+            }
+            return;
+        }
+        
+        // 有输入时的交互模式
         try (Scanner scanner = new Scanner(System.in)) {
             while (running) {
                 System.out.println("\n存储节点 " + nodeId + " 命令:");
@@ -293,6 +404,18 @@ public class StorageNode {
                         return;
                     default:
                         System.out.println("无效命令");
+                }
+            }
+        } catch (Exception e) {
+            System.out.println("输入异常，切换到无交互模式: " + e.getMessage());
+            
+            // 异常时切换到无交互模式
+            while (running) {
+                try {
+                    Thread.sleep(30000);
+                    showStatus();
+                } catch (InterruptedException ie) {
+                    break;
                 }
             }
         }

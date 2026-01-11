@@ -63,9 +63,12 @@ public class MembershipService {
         try {
             // 绑定到所有网络接口，确保容器间可以访问
             this.socket = new DatagramSocket(port, InetAddress.getByName("0.0.0.0"));
+            System.out.println("UDP socket成功绑定到端口: " + port);
         } catch (UnknownHostException e) {
             // 如果绑定失败，回退到默认方式
+            System.err.println("绑定到0.0.0.0失败，使用默认绑定: " + e.getMessage());
             this.socket = new DatagramSocket(port);
+            System.out.println("UDP socket绑定到默认地址，端口: " + port);
         }
         this.scheduler = Executors.newScheduledThreadPool(3);
         
@@ -95,8 +98,10 @@ public class MembershipService {
         
         // 启动消息处理线程
         Thread messageThread = new Thread(this::handleMessages);
+        messageThread.setDaemon(false);
+        messageThread.setName("MembershipMessageHandler-" + nodeId);
         messageThread.start();
-        System.out.println("消息处理线程已启动");
+        System.out.println("消息处理线程已启动: " + messageThread.getName());
         
         // 启动心跳发送
         scheduler.scheduleAtFixedRate(this::sendHeartbeats, 0, 
@@ -130,6 +135,7 @@ public class MembershipService {
     private void handleMessages() {
         byte[] buffer = new byte[1024];
         System.out.println("消息处理线程开始运行，准备接收UDP消息...");
+        System.out.println("线程: " + Thread.currentThread().getName() + ", Socket状态: " + !socket.isClosed() + ", 绑定端口: " + socket.getLocalPort());
         
         while (running) {
             try {
@@ -139,13 +145,29 @@ public class MembershipService {
                 
                 String message = new String(packet.getData(), 0, packet.getLength());
                 System.out.println("收到消息: " + message + " 来自: " + packet.getAddress() + ":" + packet.getPort());
-                processMessage(message, packet.getAddress(), packet.getPort());
+                
+                try {
+                    processMessage(message, packet.getAddress(), packet.getPort());
+                } catch (Exception e) {
+                    System.err.println("处理消息时出错: " + e.getMessage());
+                    e.printStackTrace();
+                }
             } catch (IOException e) {
                 if (running) {
                     System.err.println("接收消息失败: " + e.getMessage());
                     e.printStackTrace();
                 }
                 // 短暂停顿避免忙等待
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            } catch (Exception e) {
+                System.err.println("消息处理循环出现未预期错误: " + e.getMessage());
+                e.printStackTrace();
+                // 短暂停顿后继续
                 try {
                     Thread.sleep(1000);
                 } catch (InterruptedException ie) {
@@ -161,27 +183,42 @@ public class MembershipService {
      * 处理消息
      */
     private void processMessage(String message, InetAddress senderIP, int senderPort) {
+        System.out.println("处理消息: '" + message + "'");
+        
         String[] parts = message.split(":");
-        if (parts.length < 2) return;
+        System.out.println("消息分割结果: " + java.util.Arrays.toString(parts));
+        
+        if (parts.length < 1) {
+            System.out.println("消息格式无效，parts长度: " + parts.length);
+            return;
+        }
         
         String msgType = parts[0];
+        System.out.println("消息类型: '" + msgType + "'");
         
         switch (msgType) {
             case "JOIN":
+                System.out.println("处理JOIN消息");
                 handleJoinRequest(parts, senderIP, senderPort);
                 break;
             case "HEARTBEAT":
+                System.out.println("处理HEARTBEAT消息");
                 handleHeartbeat(parts);
                 break;
             case "LEAVE":
+                System.out.println("处理LEAVE消息");
                 handleLeaveRequest(parts);
                 break;
             case "MEMBERSHIP_REQUEST":
+                System.out.println("处理MEMBERSHIP_REQUEST消息");
                 handleMembershipRequest(senderIP, senderPort);
                 break;
             case "MEMBERSHIP_RESPONSE":
+                System.out.println("处理MEMBERSHIP_RESPONSE消息");
                 handleMembershipResponse(parts);
                 break;
+            default:
+                System.out.println("未知消息类型: '" + msgType + "'");
         }
     }
     

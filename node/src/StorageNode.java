@@ -13,6 +13,7 @@ import java.util.Scanner;
 public class StorageNode {
     private int nodeId;
     private int port;
+    private String studentId;
     private DatagramSocket socket;
     private File datFile;
     private File idxFile;
@@ -51,14 +52,81 @@ public class StorageNode {
     public StorageNode(int nodeId, int port, String studentId) throws SocketException {
         this.nodeId = nodeId;
         this.port = port;
+        this.studentId = studentId;
         this.socket = new DatagramSocket(port);
         
         // 创建数据和索引文件
-        this.datFile = new File("/data/" + studentId + "-hw3-" + nodeId + ".dat");
-        this.idxFile = new File("/data/" + studentId + "-hw3-" + nodeId + ".idx");
+        this.datFile = new File(studentId + "-hw3-" + nodeId + ".dat");
+        this.idxFile = new File(studentId + "-hw3-" + nodeId + ".idx");
+    }
+    
+    /**
+     * 注册到Manager
+     */
+    private void registerWithManager() {
+        String managerHost = System.getenv("MANAGER_HOST");
+        if (managerHost == null) {
+            managerHost = "manager";  // 默认值
+        }
         
-        // 确保数据目录存在
-        datFile.getParentFile().mkdirs();
+        try {
+            DatagramSocket regSocket = new DatagramSocket();
+            String joinMessage = "JOIN:" + nodeId + ":" + port;
+            byte[] data = joinMessage.getBytes();
+            
+            InetAddress managerAddress = InetAddress.getByName(managerHost);
+            DatagramPacket packet = new DatagramPacket(data, data.length, managerAddress, 9000);
+            
+            regSocket.send(packet);
+            System.out.println("已向Manager注册: " + joinMessage);
+            regSocket.close();
+        } catch (Exception e) {
+            System.err.println("注册到Manager失败: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * 发送心跳消息到Manager
+     */
+    private void sendHeartbeat() {
+        String managerHost = System.getenv("MANAGER_HOST");
+        if (managerHost == null) {
+            managerHost = "manager";
+        }
+        
+        try {
+            DatagramSocket heartbeatSocket = new DatagramSocket();
+            String heartbeatMessage = "HEARTBEAT:" + nodeId + ":localhost:" + port;
+            byte[] data = heartbeatMessage.getBytes();
+            
+            InetAddress managerAddress = InetAddress.getByName(managerHost);
+            DatagramPacket packet = new DatagramPacket(data, data.length, managerAddress, 9000);
+            
+            heartbeatSocket.send(packet);
+            heartbeatSocket.close();
+        } catch (Exception e) {
+            System.err.println("发送心跳失败: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * 启动心跳线程
+     */
+    private void startHeartbeat() {
+        Thread heartbeatThread = new Thread(() -> {
+            while (running) {
+                try {
+                    Thread.sleep(5000); // 每5秒发送一次心跳
+                    sendHeartbeat();
+                } catch (InterruptedException e) {
+                    break;
+                } catch (Exception e) {
+                    System.err.println("心跳线程异常: " + e.getMessage());
+                }
+            }
+        });
+        heartbeatThread.setDaemon(true);
+        heartbeatThread.start();
     }
     
     /**
@@ -66,6 +134,12 @@ public class StorageNode {
      */
     public void start() {
         System.out.println("存储节点 " + nodeId + " 启动在端口 " + port);
+        
+        // 注册到Manager
+        registerWithManager();
+        
+        // 启动心跳线程
+        startHeartbeat();
         
         // 启动数据接收线程
         Thread dataThread = new Thread(this::handleDataPackets);
@@ -75,20 +149,8 @@ public class StorageNode {
         Thread queryThread = new Thread(this::handleQueries);
         queryThread.start();
         
-        // 主线程保持运行
-        while (running) {
-            try {
-                Thread.sleep(1000);
-                
-                // 定期显示状态
-                if (System.currentTimeMillis() % 30000 < 1000) {
-                    showStatus();
-                }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                break;
-            }
-        }
+        // 主线程处理用户输入
+        handleUserInput();
     }
     
     /**
@@ -115,6 +177,9 @@ public class StorageNode {
      * 处理查询请求
      */
     private void handleQueries() {
+        // 暂时禁用查询功能，避免端口冲突
+        System.out.println("查询功能已暂时禁用");
+        /*
         // 启动查询服务器在另一个端口
         try (DatagramSocket querySocket = new DatagramSocket(port + 1000)) {
             byte[] buffer = new byte[1024];
@@ -134,6 +199,7 @@ public class StorageNode {
         } catch (SocketException e) {
             e.printStackTrace();
         }
+        */
     }
     
     /**
@@ -281,21 +347,88 @@ public class StorageNode {
     }
     
     /**
+     * 处理用户输入 (支持无交互模式)
+     */
+    private void handleUserInput() {
+        try {
+            // 检查是否有可用输入
+            if (System.in.available() == 0) {
+                System.out.println("运行在无交互模式，定期显示状态...");
+                
+                // 无交互模式：定期显示状态
+                while (running) {
+                    try {
+                        Thread.sleep(30000); // 每30秒显示一次状态
+                        showStatus();
+                    } catch (InterruptedException ie) {
+                        break;
+                    }
+                }
+                return;
+            }
+        } catch (IOException e) {
+            System.out.println("检查输入失败，使用无交互模式");
+            
+            // 无交互模式
+            while (running) {
+                try {
+                    Thread.sleep(30000); // 每30秒显示一次状态
+                    showStatus();
+                } catch (InterruptedException ie2) {
+                    break;
+                }
+            }
+            return;
+        }
+        
+        // 有输入时的交互模式
+        try (Scanner scanner = new Scanner(System.in)) {
+            while (running) {
+                System.out.println("\n存储节点 " + nodeId + " 命令:");
+                System.out.println("1. status - 显示状态");
+                System.out.println("2. index - 显示索引");
+                System.out.println("3. quit - 退出");
+                System.out.print("请输入命令: ");
+                
+                String command = scanner.nextLine().trim();
+                
+                switch (command) {
+                    case "status":
+                        showStatus();
+                        break;
+                    case "index":
+                        showIndex();
+                        break;
+                    case "quit":
+                        shutdown();
+                        return;
+                    default:
+                        System.out.println("无效命令");
+                }
+            }
+        } catch (Exception e) {
+            System.out.println("输入异常，切换到无交互模式: " + e.getMessage());
+            
+            // 异常时切换到无交互模式
+            while (running) {
+                try {
+                    Thread.sleep(30000);
+                    showStatus();
+                } catch (InterruptedException ie) {
+                    break;
+                }
+            }
+        }
+    }
+    
+    /**
      * 显示节点状态
      */
     private void showStatus() {
-        System.out.println("\\n=== 节点状态 ===");
         System.out.println("节点ID: " + nodeId);
         System.out.println("端口: " + port);
         System.out.println("数据文件: " + datFile.getName() + " (大小: " + datFile.length() + " 字节)");
         System.out.println("索引文件: " + idxFile.getName() + " (存在: " + idxFile.exists() + ")");
-        
-        try {
-            List<IndexEntry> indices = loadIndices();
-            System.out.println("索引条目数: " + indices.size());
-        } catch (IOException e) {
-            System.err.println("读取索引失败: " + e.getMessage());
-        }
     }
     
     /**
@@ -324,5 +457,23 @@ public class StorageNode {
             socket.close();
         }
         System.out.println("存储节点 " + nodeId + " 已关闭");
+    }
+    
+    public static void main(String[] args) {
+        if (args.length != 3) {
+            System.out.println("用法: java StorageNode <nodeId> <port> <studentId>");
+            return;
+        }
+        
+        try {
+            int nodeId = Integer.parseInt(args[0]);
+            int port = Integer.parseInt(args[1]);
+            String studentId = args[2];
+            
+            StorageNode node = new StorageNode(nodeId, port, studentId);
+            node.start();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 }
